@@ -11,6 +11,12 @@
 # game dies; and `--restore` at login. State lives on the host filesystem so
 # all three layers, and you, see the same file.
 #
+# A fourth layer runs only while the game does. mutter applies our layout with
+# the TEMPORARY method and never writes it down, so it puts the old scale back
+# on its own after a suspend/resume or a hotplug — leaving the compensation
+# below stranded on top of the desktop's own scale. The keeper watches
+# MonitorsChanged and re-asserts.
+#
 # SETUP
 #
 #   mkdir -p ~/.local/bin ~/.local/state/gamescale
@@ -76,13 +82,14 @@
 #   GAMESCALE_SCALE     scale while playing        (default: 1)
 #   GAMESCALE_NO_FONT   1 to skip font/cursor compensation
 #   GAMESCALE_NO_WATCH  1 to skip the host watchdog (trap only)
+#   GAMESCALE_NO_KEEP   1 to let mutter take the scale back mid-game
 #   GAMESCALE_DEBUG     1 for verbose logging
 
 set -uo pipefail
 
 # The script is copied to ~/.local/bin, so nothing else on the system records
 # which release it came from. Release CI refuses a tag that disagrees.
-readonly VERSION="2.0.1"
+readonly VERSION="2.0.2"
 
 readonly IFACE_SCHEMA="org.gnome.desktop.interface"
 # 12h ceiling. On reaching it the watchdog gives up WITHOUT restoring — a game
@@ -397,6 +404,8 @@ MON_CONNS=(); MON_SCALE=(); MON_PRIM=(); MON_X=(); MON_Y=(); MON_TRANSFORM=()
 #   display_config read                 print one TSV record per logical monitor
 #   display_config verify [--pack] REC  would mutter accept this?
 #   display_config apply  [--pack] REC  verify, then apply
+#   display_config hold   SCALE         put every monitor back at SCALE
+#   display_config watch  SCALE RUN ID  hold SCALE for as long as RUN names ID
 #
 # --pack ignores the x/y in the records and lays the monitors out edge to edge
 # (what applying needs: at a new scale the old coordinates no longer tile).
@@ -544,7 +553,7 @@ def parse_record(text):
         fail("malformed record %r" % text)
 
 
-def snap_scale(scale, supported):
+def snap_scale(scale, supported, quiet=False):
     """The supported scale to use, which mutter will accept as given."""
     best = None
     for candidate in supported:
@@ -555,7 +564,7 @@ def snap_scale(scale, supported):
             best = (candidate, distance)
     if best is None:
         fail("scale %s is not supported by this monitor" % scale, 2)
-    if best[0] != scale:
+    if best[0] != scale and not quiet:
         print("gamescale: scale %s -> %r, the nearest supported"
               % (scale, best[0]), file=sys.stderr)
     return best[0]
@@ -590,7 +599,7 @@ def pack(records, modes, layout_mode):
     return ordered
 
 
-def apply(proxy, serial, monitors, properties, records, method):
+def apply(proxy, serial, monitors, properties, records, method, pack_layout):
     modes = modes_by_connector(monitors)
     for record in records:
         for connector in record["connectors"]:
@@ -601,7 +610,7 @@ def apply(proxy, serial, monitors, properties, records, method):
         )
 
     layout_mode = properties.get("layout-mode", LOGICAL_LAYOUT_MODE)
-    if "--pack" in sys.argv:
+    if pack_layout:
         records = pack(records, modes, layout_mode)
 
     logical = [
@@ -636,10 +645,131 @@ def apply(proxy, serial, monitors, properties, records, method):
         fail("mutter rejected the configuration: %s" % exc, 2)
 
 
+def hold(proxy, scale):
+    """Put every logical monitor back at `scale`. True if any had moved.
+
+    mutter never writes a TEMPORARY configuration down, so anything that makes
+    it re-derive the layout from its own store — a suspend/resume, a hotplug, a
+    VT switch — silently restores the scale the session started with. The font
+    and cursor compensation is a gsettings key and survives all of that, so the
+    desktop comes back scaled twice.
+    """
+    serial, monitors, logical, properties = current_state(proxy)
+
+    # Against the scale mutter would snap to, not the one asked for: comparing
+    # against the request would call an exactly-applied layout "moved" on every
+    # signal, and each re-assert emits another one.
+    modes = modes_by_connector(monitors)
+    moved = False
+    for _x, _y, current, _transform, _primary, mons, _props in logical:
+        supported = modes.get(mons[0][0], {}).get("scales", [scale])
+        if abs(current - snap_scale(scale, supported, quiet=True)) > 1e-9:
+            moved = True
+            break
+    if not moved:
+        return False
+
+    records = [
+        {
+            "connectors": [m[0] for m in mons],
+            "scale": scale,
+            "primary": primary,
+            "x": x,
+            "y": y,
+            "transform": transform,
+        }
+        for x, y, _scale, transform, primary, mons, _props in logical
+    ]
+    apply(proxy, serial, monitors, properties, records, VERIFY, True)
+    apply(proxy, serial, monitors, properties, records, TEMPORARY, True)
+    return True
+
+
+def watch(proxy, scale, run_file, run_id):
+    """Hold `scale` until run_file stops naming this run.
+
+    Ownership is re-read immediately before every re-assert, not only on the
+    tick: restoring clears the run file BEFORE it moves the display, so the
+    layer putting your desktop back is never fought by this one.
+    """
+    loop = GLib.MainLoop()
+    pending = failures = 0
+
+    def owned():
+        try:
+            with open(run_file) as handle:
+                return handle.read().strip() == run_id
+        except OSError:
+            return False
+
+    def settled():
+        nonlocal pending, failures
+        pending = 0
+        if not owned():
+            loop.quit()
+            return GLib.SOURCE_REMOVE
+        try:
+            if hold(proxy, scale):
+                print("gamescale: display moved off %s; put it back" % scale,
+                      file=sys.stderr)
+            failures = 0
+        except SystemExit:
+            # fail() has already said why. A display that refuses us three
+            # times running is one we are not going to win against.
+            failures += 1
+            if failures >= 3:
+                print("gamescale: giving up holding the layout", file=sys.stderr)
+                loop.quit()
+        return GLib.SOURCE_REMOVE
+
+    def changed(_proxy, _sender, signal, _params):
+        nonlocal pending
+        if signal != "MonitorsChanged":
+            return
+        # mutter emits several of these while it settles, and our own apply
+        # emits one more; act once, after the dust.
+        if pending:
+            GLib.source_remove(pending)
+        pending = GLib.timeout_add_seconds(2, settled)
+
+    def tick():
+        if owned():
+            return GLib.SOURCE_CONTINUE
+        loop.quit()
+        return GLib.SOURCE_REMOVE
+
+    proxy.connect("g-signal", changed)
+    # The run ending is not a display event, so nothing above would notice it.
+    GLib.timeout_add_seconds(2, tick)
+    loop.run()
+
+
+def parse_scale(text):
+    try:
+        return float(text)
+    except ValueError:
+        fail("malformed scale %r" % text)
+
+
 command = sys.argv[1] if len(sys.argv) > 1 else "read"
-records = [parse_record(a) for a in sys.argv[2:] if not a.startswith("--")]
+arguments = [a for a in sys.argv[2:] if not a.startswith("--")]
+pack_layout = "--pack" in sys.argv
 
 proxy = connect()
+
+if command == "watch":
+    if len(arguments) != 3:
+        fail("watch takes a scale, a run file and a run id")
+    watch(proxy, parse_scale(arguments[0]), arguments[1], arguments[2])
+    raise SystemExit(0)
+
+if command == "hold":
+    if len(arguments) != 1:
+        fail("hold takes a scale")
+    hold(proxy, parse_scale(arguments[0]))
+    raise SystemExit(0)
+
+records = [parse_record(a) for a in arguments]
 serial, monitors, logical, properties = current_state(proxy)
 
 if command == "read":
@@ -648,9 +778,10 @@ elif command in ("verify", "apply"):
     if not records:
         fail("nothing to apply")
     # Verify first either way, so nothing moves on a config mutter refuses.
-    apply(proxy, serial, monitors, properties, records, VERIFY)
+    apply(proxy, serial, monitors, properties, records, VERIFY, pack_layout)
     if command == "apply":
-        apply(proxy, serial, monitors, properties, records, TEMPORARY)
+        apply(proxy, serial, monitors, properties, records, TEMPORARY,
+              pack_layout)
 else:
     fail("unknown command %r" % command)
 PY
@@ -737,6 +868,7 @@ state_read()   { host cat "$STATE_FILE" 2>/dev/null; }
 state_exists() { host test -r "$STATE_FILE"; }
 state_clear()  { host rm -f "$STATE_FILE" "$RUN_FILE"; }
 run_owner()    { host cat "$RUN_FILE" 2>/dev/null; }
+run_clear()    { host rm -f "$RUN_FILE"; }
 
 # Strict key=value parse — deliberately NOT `source`. The state directory is
 # writable by the sandboxed app we launch, and restore_now() also runs on the
@@ -858,6 +990,12 @@ restore_now() {
     fi
 
     log "restoring ${#MON_CONNS[@]} monitor(s) (text $text_scale, cursor $cursor_size)"
+    # Before the display moves, not after: the keeper stands down on this file,
+    # and a keeper still up when the scale changes reads the restore as drift
+    # and undoes it. Ownership is all this file carries — the watchdog treats
+    # its absence as "nobody owns this state", which is what a restore in
+    # progress means.
+    run_clear
     records
     if ! apply_records; then
         log "saved layout was rejected; retrying with connected monitors only"
@@ -1602,8 +1740,10 @@ if [[ "${GAMESCALE_NO_WATCH:-0}" != "1" && $CAN_WATCH == 1 && $HAVE_LOCK == 1 ]]
 fi
 
 # Layer 1.
+KEEPER=0
 cleanup() {
     trap - EXIT INT TERM
+    [[ $KEEPER != 0 ]] && kill "$KEEPER" 2>/dev/null
     restore_now
 }
 trap cleanup EXIT INT TERM
@@ -1629,6 +1769,23 @@ if [[ $NO_FONT == 0 ]]; then
     set_setting text-scaling-factor "$(fmul "$ORIG_TEXT_SCALE" "$RATIO")"
     set_setting cursor-size "$(fround "$(fmul "$ORIG_CURSOR_SIZE" "$RATIO")")"
     log "compensated ${RATIO}x"
+fi
+
+# Layer 4, and the only one that acts while the game is still running. mutter
+# drops the configuration above whenever it re-derives the layout — a
+# suspend/resume, a monitor hotplug, a VT switch — and the compensation just
+# applied survives that, so the desktop comes back scaled twice and the game
+# loses the mode it was launched for. Started last: everything before this is
+# the layout it exists to hold.
+#
+# 9>&- because the watchdog waits on that descriptor: a keeper holding a copy
+# of it keeps the lock alive after the game is gone, and the layer that covers
+# a SIGKILL would never wake. Killing it on the way out is tidiness only — what
+# actually stops it acting is restore clearing the run file first.
+if [[ "${GAMESCALE_NO_KEEP:-0}" != "1" ]]; then
+    display_config watch "$GAME_SCALE" "$RUN_FILE" "$RUN_ID" 9>&- &
+    KEEPER=$!
+    log "keeper started (pid $KEEPER)"
 fi
 
 # Let mutter settle before the game enumerates outputs.
