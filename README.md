@@ -28,7 +28,8 @@ desktop reports. Scale 1.0 is the only configuration where XWayland is handed
 the real mode, so gamescale sets it for the lifetime of one process,
 compensates font and cursor size so the desktop stays usable, and reverts on
 exit — surviving crashes and SIGKILL via a watchdog, a state file, and a login
-reconcile unit.
+reconcile unit, and holding the scale when mutter takes it back after a
+suspend or a hotplug.
 
 ## Install
 
@@ -105,7 +106,7 @@ Modes:
 | `--help` | full commentary from the top of the script |
 
 Env: `GAMESCALE_SCALE`, `GAMESCALE_NO_FONT=1`, `GAMESCALE_NO_WATCH=1`,
-`GAMESCALE_DEBUG=1`.
+`GAMESCALE_NO_KEEP=1`, `GAMESCALE_DEBUG=1`.
 
 Per-game defaults in `~/.local/state/gamescale/games.conf`, so every title can
 keep the same launch options string:

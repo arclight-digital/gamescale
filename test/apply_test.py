@@ -217,4 +217,49 @@ r = h.run(["apply", "eDP-1;1;yes;0;0;normal"],
 t.equal("layout-mode is omitted when mutter does not support changing it",
         r.applied[-1]["properties"], {})
 
+# --- hold: putting back what mutter took back -------------------------------
+#
+# mutter never writes a TEMPORARY configuration down, so a resume or a hotplug
+# restores the session's own scale while the font compensation stays put — the
+# desktop comes back scaled twice. `hold` is the one pass that fixes it, and its
+# hard requirement is doing NOTHING when nothing moved: it runs on every
+# MonitorsChanged, and each configuration it sends emits another one.
+r = h.run(["hold", "1"], h.reply(ONE, [h.logical("eDP-1", scale=1.0)]))
+t.equal("a layout already at the game scale is left alone", r.applied, [])
+
+r = h.run(["hold", "1"], h.reply(ONE, [h.logical("eDP-1", scale=1.3333333730697632)]))
+t.equal("a layout that moved is verified then re-applied",
+        r.methods, [h.VERIFY, h.TEMPORARY])
+t.equal("it goes back to the game scale", r.applied[-1]["logical"][0][2], 1.0)
+
+# The scale asked for is not always the scale mutter uses. Comparing against
+# the request instead of the substitution would call an exactly-applied layout
+# "moved" on every signal, and re-assert forever.
+r = h.run(["hold", "1.33"],
+          h.reply(ONE, [h.logical("eDP-1", scale=1.3333333730697632)]))
+t.equal("a snapped scale counts as already held", r.applied, [])
+
+# Whatever mutter put back is the layout to re-scale: primary, rotation and the
+# monitor set all come from the current state, not from a record on the command
+# line, because a hotplug is one of the things that lands here.
+r = h.run(["hold", "1"],
+          h.reply(TWO, [h.logical("eDP-1", scale=2.0, transform=1, primary=False),
+                        h.logical("HDMI-1", scale=2.0, primary=True, x=960)]))
+sent = r.applied[-1]["logical"]
+t.equal("every monitor is taken to the game scale", [m[2] for m in sent], [1.0, 1.0])
+t.equal("rotation is preserved", sent[0][3], 1)
+t.equal("primary is preserved", [m[4] for m in sent], [False, True])
+# Rotated: 2560x1600 becomes 1600 wide, and at 1x the next monitor starts there.
+t.equal("the re-asserted layout tiles", [(m[0], m[1]) for m in sent], [(0, 0), (1600, 0)])
+
+r = h.run(["hold", "3.7"], h.reply(ONE, [h.logical("eDP-1", scale=2.0)]))
+t.equal("holding an unsupported scale is refused", r.code, 2)
+t.equal("holding an unsupported scale applies nothing", r.applied, [])
+
+r = h.run(["hold"], h.reply(ONE, [h.logical("eDP-1")]))
+t.equal("hold with no scale fails", r.code, 1)
+
+r = h.run(["hold", "x"], h.reply(ONE, [h.logical("eDP-1")]))
+t.equal("hold with a malformed scale fails", r.code, 1)
+
 t.done()

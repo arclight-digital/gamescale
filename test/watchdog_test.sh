@@ -171,6 +171,60 @@ else
     bad "NOT restored on normal exit"
 fi
 
+# --- the keeper runs for the life of the game, and not a moment longer -------
+#
+# mutter drops our layout on a resume and puts its own scale back, while the
+# font compensation stays — the desktop returns scaled twice. The keeper is the
+# only layer that acts mid-game, so it must be up while the game is, and down
+# before the restore moves anything: one still up would read the restore as
+# drift and undo it.
+fresh_home
+WITNESS="$WORK/runfile$CASE.log"
+
+DETECT_FIXTURE="$FIXTURE" PY_LOG="$LOG" SYSTEMD_RUN_LOG="$RUNLOG" \
+RUNFILE_LOG="$WITNESS" RUNFILE_PATH="$RUNF" \
+HOME="$FAKEHOME" PATH="$STUBS:$PATH" \
+    bash "$SCRIPT" -- sleep 3 >/dev/null 2>&1 &
+runner=$!
+
+keeper_up() { grep -q -- "watch 1 $RUNF " "$LOG"; }
+if wait_for keeper_up 10; then
+    ok "keeper started for the launched scale"
+else
+    bad "keeper was never started"
+fi
+
+# It is told the run it belongs to, and that is the token in the run file. A
+# keeper answering to the wrong token never stands down.
+if grep -q -- "watch 1 $RUNF $(cat "$RUNF" 2>/dev/null)$" "$LOG"; then
+    ok "keeper carries this run's token"
+else
+    bad "keeper's token does not match the run file"
+fi
+
+wait "$runner" 2>/dev/null
+if wait_for restored 10; then
+    ok "restored on normal exit with a keeper running"
+else
+    bad "NOT restored on normal exit with a keeper running"
+fi
+
+keeper_down() { ! pgrep -f "watch 1 $RUNF" >/dev/null 2>&1; }
+if wait_for keeper_down 10; then
+    ok "keeper stood down once the run was over"
+else
+    bad "keeper outlived the game"
+fi
+
+# The restore's own apply must land after ownership is gone.
+if [[ "$(grep -c '^apply ' "$WITNESS")" -ge 2 &&
+      "$(grep '^apply ' "$WITNESS" | tail -1)" == "apply absent" ]]; then
+    ok "ownership is cleared before the restore moves the display"
+else
+    bad "restore moved the display while the run still owned it"
+    printf '        run-file witness: %s\n' "$(tr '\n' '|' < "$WITNESS")"
+fi
+
 # --- a stranded state file is reconciled on the next launch ------------------
 #
 # Covers the login unit's job without needing systemd: --restore is what it

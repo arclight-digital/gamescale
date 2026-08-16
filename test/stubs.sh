@@ -13,6 +13,8 @@
 #   DETECT_FIXTURE   TSV records `read` answers with
 #   PY_LOG           file receiving one line per display-program invocation
 #   PY_FAIL_RC       exit status for apply/verify (2 = mutter refused)
+#   RUNFILE_LOG      file receiving `<subcommand> present|absent` per call,
+#   RUNFILE_PATH     for the run file at RUNFILE_PATH
 #   GS_LOG           file receiving one line per gsettings call
 #   GS_FAIL_SET      substring of a gsettings key whose `set` must fail
 #   GS_EXT_LIST      what `get org.gnome.shell enabled-extensions` returns
@@ -43,8 +45,23 @@ if [ "${1:-}" = "-" ]; then
     shift
 fi
 cmd="${1:-read}"
+# Whether the run file still existed at each call. The order of clearing
+# ownership and moving the display is load-bearing — a keeper still up when the
+# scale changes reads the restore as drift and undoes it — and nothing in
+# PY_LOG can show it.
+if [ -n "${RUNFILE_LOG:-}" ]; then
+    if [ -e "${RUNFILE_PATH:-}" ]; then echo "$cmd present" >> "$RUNFILE_LOG"
+    else echo "$cmd absent" >> "$RUNFILE_LOG"; fi
+fi
 if [ "$cmd" = "read" ]; then
     printf '%s\n' "$DETECT_FIXTURE"
+    exit 0
+fi
+# The keeper: `watch SCALE RUN_FILE RUN_ID`, up until the run file stops naming
+# it. Modelling the stand-down rather than sleeping is what makes "the keeper is
+# gone once the run is over" an assertion instead of a hope.
+if [ "$cmd" = "watch" ]; then
+    while [ "$(cat "$3" 2>/dev/null)" = "$4" ]; do sleep 0.2; done
     exit 0
 fi
 [ -n "${PY_FAIL_RC:-}" ] && exit "$PY_FAIL_RC"

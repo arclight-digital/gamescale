@@ -3,6 +3,30 @@
 Dates are release dates. "Stranding" below means a desktop left at 1× scale,
 which is the failure this tool exists not to cause.
 
+## 2.0.2 — 2026-08-16
+
+### Fixed
+
+- **A suspend and resume left the desktop scaled twice.** mutter applies our
+  layout with the `TEMPORARY` method and never writes it down, so on resume it
+  re-derives the layout from its own store and quietly puts the session's scale
+  back. The font and cursor compensation is a gsettings key and survives that,
+  so the desktop returned at its own scale *and* the compensation for having
+  lost it — everything huge — while the game silently lost the 1× mode it was
+  launched for. Every restore layer keyed on the game process exiting, so
+  nothing noticed. A keeper now watches `MonitorsChanged` for the life of the
+  run and re-asserts the layout; a hotplug and a VT switch took the scale away
+  the same way and are covered by the same watch. `GAMESCALE_NO_KEEP=1` opts
+  out.
+
+### Changed
+
+- Restoring clears the run file before it moves the display, rather than with
+  the state file afterwards. Ownership is what the keeper stands down on, and
+  one still up would read the restore as drift and undo it. A watchdog reads an
+  absent run file as "nobody owns this state", which is what a restore in
+  progress means.
+
 ## 2.0.1 — 2026-08-05
 
 ### Changed
