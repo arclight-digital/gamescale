@@ -104,6 +104,9 @@ jobs:
           [ -n "$v" ] || { echo "no VERSION in gamescale.sh"; exit 1; }
           echo "$v" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' \
             || { echo "VERSION '$v' is not x.y.z"; exit 1; }
+          ext=$(sed -n 's/^ *"version-name": "\(.*\)",$/\1/p' extension/metadata.json)
+          [ "$ext" = "$v" ] \
+            || { echo "extension version-name '$ext', expected '$v'"; exit 1; }
           reported=$(bash gamescale.sh --version)
           [ "$reported" = "gamescale $v" ] \
             || { echo "--version said '$reported', expected 'gamescale $v'"; exit 1; }

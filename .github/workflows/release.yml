@@ -22,8 +22,10 @@ jobs:
 
       - name: resolve tag
         id: tag
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
         run: |
-          tag="${{ github.event.inputs.tag }}"
+          tag="$INPUT_TAG"
           [ -n "$tag" ] || tag="${GITHUB_REF#refs/tags/}"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
@@ -31,11 +33,13 @@ jobs:
       # bug report from it misleading. Refuse to publish that rather than fix
       # it after the fact — a release asset can be replaced, but not unshipped.
       - name: tag matches VERSION
+        env:
+          tag: ${{ steps.tag.outputs.tag }}
         run: |
-          tag="${{ steps.tag.outputs.tag }}"
           version=$(sed -n 's/^readonly VERSION="\(.*\)"$/\1/p' gamescale.sh)
-          if [ "$tag" != "v$version" ]; then
-            echo "tag $tag but gamescale.sh reports VERSION=$version" >&2
+          ext=$(sed -n 's/^ *"version-name": "\(.*\)",$/\1/p' extension/metadata.json)
+          if [ "$tag" != "v$version" ] || [ "$ext" != "$version" ]; then
+            echo "tag $tag, gamescale.sh VERSION=$version, extension version-name=$ext" >&2
             exit 1
           fi
           echo "$tag == v$version"
@@ -58,6 +62,7 @@ jobs:
           ./test/sandbox_test.sh
           ./test/env_test.sh
           ./test/install_test.sh
+          ./test/extension_test.sh
           GAMESCALE_NO_FLATPAK=1 GAMESCALE_NO_UNIT=1 ./install.sh --dry-run
           GAMESCALE_NO_FLATPAK=1 GAMESCALE_NO_UNIT=1 ./install.sh --uninstall --dry-run
         timeout-minutes: 8
@@ -72,8 +77,8 @@ jobs:
       - name: publish
         env:
           GH_TOKEN: ${{ github.token }}
+          tag: ${{ steps.tag.outputs.tag }}
         run: |
-          tag="${{ steps.tag.outputs.tag }}"
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" gamescale.sh install.sh SHA256SUMS --clobber
           else

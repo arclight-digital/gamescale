@@ -76,11 +76,8 @@ r = read([h.logical("eDP-1")],
 t.equal("a hostile product name cannot leak into a record", r.lines,
         ["eDP-1\t1.0\tyes\t0\t0\tnormal"])
 
-# gdctl numbers these in an order its own names do not suggest: 6 is
-# flipped-270 and 7 is flipped-180. The state file stores these names, so this
-# is the spelling that has to round-trip. Assuming mutter's enum order instead
-# would rotate two of the eight configurations wrongly on restore, and only for
-# the few people using them.
+# gdctl's spelling, 6 and 7 backwards included: state files already store
+# these names, so changing them would misread one written by an older release.
 for value, name in ((0, "normal"), (1, "90"), (2, "180"), (3, "270"),
                     (4, "flipped"), (5, "flipped-90"),
                     (6, "flipped-270"), (7, "flipped-180")):

@@ -201,12 +201,15 @@ done
 # Where the binary lives. Uninstall has to find an install that used a custom
 # GAMESCALE_BINDIR without being told again, so look for it rather than
 # assuming: the variable, then PATH, then a read-only grant we gave a launcher,
-# then the default.
+# then the default. A PATH hit in a directory we can't write is a system
+# install (an OS image's /usr/bin), not ours.
 find_bindir() {
     if [ -n "${GAMESCALE_BINDIR:-}" ]; then printf '%s' "$GAMESCALE_BINDIR"; return; fi
 
     found=$(command -v gamescale 2>/dev/null || true)
-    if [ -n "$found" ]; then dirname "$found"; return; fi
+    if [ -n "$found" ] && [ -w "$(dirname "$found")" ]; then
+        dirname "$found"; return
+    fi
 
     if command -v flatpak >/dev/null 2>&1; then
         for id in $(known_ids); do
@@ -262,9 +265,12 @@ if [ "$MODE" = "uninstall" ]; then
         else
             systemctl --user disable --now gamescale-reconcile.service >/dev/null 2>&1 || true
         fi
-        act rm -f "$HOME/.config/systemd/user/gamescale-reconcile.service"
-        [ "$DRY" = 1 ] || systemctl --user daemon-reload >/dev/null 2>&1 || true
-        note "removed gamescale-reconcile.service"
+        unit="$HOME/.config/systemd/user/gamescale-reconcile.service"
+        if [ -e "$unit" ]; then
+            act rm -f "$unit"
+            [ "$DRY" = 1 ] || systemctl --user daemon-reload >/dev/null 2>&1 || true
+            note "removed gamescale-reconcile.service"
+        fi
     fi
 
     if ext_remove "$EXT_UUID" "$EXT_DIR"; then
@@ -353,7 +359,8 @@ fi
 SRC=""
 CLEANUP=""
 # shellcheck disable=SC2086
-trap 'if [ -n "$CLEANUP" ]; then rm -f $CLEANUP; fi' EXIT INT TERM
+trap 'if [ -n "$CLEANUP" ]; then rm -f $CLEANUP; fi' EXIT
+trap 'exit 130' INT TERM
 
 # Whichever of the three is here — coreutils, perl's, or openssl. All three
 # read stdin so the filename never reaches the output that gets parsed.
@@ -430,6 +437,11 @@ grep -q 'GAMESCALE_SCALE' "$SRC" || die "downloaded file does not look like game
 # ---------------------------------------------------------------------------
 # Install
 # ---------------------------------------------------------------------------
+
+if [ -d "/usr/share/gnome-shell/extensions/$EXT_UUID" ]; then
+    warn "your system already provides gamescale; this home install overrides it
+   and stops following its updates — --uninstall goes back to the system copy"
+fi
 
 act mkdir -p "$BINDIR" "$STATE_DIR"
 act install -m 755 "$SRC" "$TARGET"

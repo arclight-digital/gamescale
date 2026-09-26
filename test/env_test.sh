@@ -727,7 +727,11 @@ if [[ $rc -eq 0 ]]; then ok "a good games.conf is not a failure"; else
 EXTROOT="$WORK/extensions"; mkdir -p "$EXTROOT"
 EXT_V2="gamescale@arclight.digital"
 EXT_V1="gamescale@proto-cool.github.io"
-ext_doctor() { doctor GAMESCALE_NTSYNC_DEV="$NTSYNC" GAMESCALE_EXT_ROOT="$EXTROOT" "$@"; }
+SYSEXTROOT="$WORK/sys-extensions"; mkdir -p "$SYSEXTROOT"
+ext_doctor() {
+    doctor GAMESCALE_NTSYNC_DEV="$NTSYNC" GAMESCALE_EXT_ROOT="$EXTROOT" \
+        GAMESCALE_SYS_EXT_ROOT="$SYSEXTROOT" "$@"
+}
 
 ext_doctor
 rc=$?
@@ -745,6 +749,15 @@ if [[ $rc -eq 0 ]]; then ok "an unenabled extension is a warning, not a failure"
 
 ext_doctor GS_EXT_LIST="['$EXT_V2']"
 said "installed and enabled" "doctor confirms an enabled extension"
+
+# A home copy silently wins over an OS image's, and stops getting its fixes.
+mkdir -p "$SYSEXTROOT/$EXT_V2"
+ext_doctor GS_EXT_LIST="['$EXT_V2']"
+said "overriding the one your system provides" "doctor spots a home copy shadowing the system one"
+rm -rf "${EXTROOT:?}/$EXT_V2"
+ext_doctor GS_EXT_LIST="['$EXT_V2']"
+said "installed and enabled" "doctor accepts a system-wide extension on its own"
+rm -rf "${SYSEXTROOT:?}/$EXT_V2"; mkdir -p "$EXTROOT/$EXT_V2"
 
 # An absent schema is not the same fact as an empty list.
 ext_doctor GS_EXT_LIST=fail

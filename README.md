@@ -43,6 +43,10 @@ launchers you name what they need, installs the login reconcile unit, runs
 `--doctor`. Re-runnable; downloads are checksum-verified; `--uninstall`
 removes everything.
 
+If your OS image already ships gamescale, skip this: a home install overrides
+the system copy and stops following its updates. `--doctor` says when that has
+happened, and `install.sh --uninstall` goes back to the system copy.
+
 Upgrading from 1.x: the extension's uuid changed to `gamescale@arclight.digital`,
 which the shell treats as a different extension rather than a newer one.
 Installing from a checkout removes the old one and puts the new one in its

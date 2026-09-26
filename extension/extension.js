@@ -279,7 +279,7 @@ export default class GamescaleExtension extends Extension {
         for (const actor of global.get_window_actors()) {
             const w = actor.meta_window;
             if (w.is_override_redirect() || w.is_fullscreen() ||
-                w.get_maximized() || w.minimized)
+                (w.get_maximize_flags?.() ?? w.get_maximized()) || w.minimized)
                 continue;
             const r = w.get_frame_rect();
             const entry = [w, r, 0];

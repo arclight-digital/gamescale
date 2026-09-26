@@ -111,7 +111,8 @@ install_sh() {  # install_sh ARGS... ; env comes from the caller
     # exactly how that happened.
     env -u GAMESCALE_NO_FLATPAK -u GAMESCALE_REF -u GAMESCALE_NO_VERIFY \
         -u GAMESCALE_NO_EXTENSION \
-        HOME="$FAKEHOME" GAMESCALE_BINDIR="$BINDIR" PATH="$STUBS:/usr/bin:/bin" \
+        HOME="$FAKEHOME" GAMESCALE_BINDIR="${GAMESCALE_BINDIR-$BINDIR}" \
+        PATH="${EXTRA_PATH:+$EXTRA_PATH:}$STUBS:/usr/bin:/bin" \
         FLATPAK_LOG="$FLATPAK_LOG" INSTALLED="${INSTALLED:-}" \
         HOME_ACCESS_APP="${HOME_ACCESS_APP:-}" OVERRIDES="${OVERRIDES:-}" \
         SANDBOX_PATH="${SANDBOX_PATH:-}" SERVE="$SERVE" EXT_LOG="$EXT_LOG" \
@@ -525,6 +526,18 @@ if [[ ! -d "$V1_DIR" ]]; then
     ok "uninstall removes the v1 extension too"
 else
     bad "uninstall left the v1 extension behind"
+fi
+
+# An OS image's copy on PATH is not an install location: /usr/bin is read-only.
+SYSBIN="$WORK/sysbin"
+mkdir -p "$SYSBIN"; : > "$SYSBIN/gamescale"; chmod 755 "$SYSBIN/gamescale"
+chmod 555 "$SYSBIN"
+out=$(GAMESCALE_BINDIR='' EXTRA_PATH="$SYSBIN" install_sh --dry-run)
+chmod 755 "$SYSBIN"
+if [[ "$out" == *"$FAKEHOME/.local/bin/gamescale"* && "$out" != *"$SYSBIN/gamescale"* ]]; then
+    ok "a read-only gamescale on PATH doesn't become the install target"
+else
+    bad "installed over a read-only system copy"; printf '%s\n' "$out" | sed 's/^/        /'
 fi
 
 echo

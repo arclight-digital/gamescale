@@ -30,6 +30,7 @@
 #       com.valvesoftware.Steam
 #
 #   gamescale --doctor          verify every moving part
+#   gamescale --restore         put the display back if a run left it at 1x
 #   gamescale --install-unit    install the login reconcile service
 #   gamescale --version         print the installed version
 #
@@ -148,6 +149,11 @@ case "${1:-}" in
     --help|-h)      awk 'NR > 1 { if ($0 !~ /^#/) exit; sub(/^# ?/, ""); print }' \
                         "$SELF"; exit 0 ;;
 esac
+# `--set-game 620 w MANGOHUD=1` (comma forgotten) must not quietly write `620 = w`.
+if [[ "$MODE" != run && "$MODE" != watchdog && $# -gt 0 ]]; then
+    warn "unexpected argument: $1"
+    exit 2
+fi
 
 # ---------------------------------------------------------------------------
 # Run-mode flags. Everything the parser learns lands in the same places the
@@ -367,6 +373,7 @@ readonly NTSYNC_DEV="${GAMESCALE_NTSYNC_DEV:-/dev/ntsync}"
 # The indicator extension. The script never talks to it — it only writes the
 # state file the extension reads — so these are for --doctor alone.
 readonly EXT_ROOT="${GAMESCALE_EXT_ROOT:-${HOST_HOME}/.local/share/gnome-shell/extensions}"
+readonly SYS_EXT_ROOT="${GAMESCALE_SYS_EXT_ROOT:-/usr/share/gnome-shell/extensions}"
 readonly EXT_UUID="gamescale@arclight.digital"
 readonly EXT_UUID_V1="gamescale@proto-cool.github.io"
 
@@ -424,11 +431,9 @@ import gi
 gi.require_version("Gio", "2.0")
 from gi.repository import GLib, Gio
 
-# gdctl's numeric -> CLI spelling, copied from its Transform.enum_names table.
-# 6 and 7 are NOT in the order the names suggest: gdctl calls 6 flipped-270
-# and 7 flipped-180, the reverse of mutter's own enum order. The state file
-# stores these names, so this spelling is what has to survive a round trip;
-# the intuitive order would silently rotate two configurations wrongly.
+# gdctl's numeric -> CLI spelling. gdctl 50.5 has 6 and 7 backwards (mutter's
+# enum is 6 = flipped-180, 7 = flipped-270), but state files already store
+# these names, so the spelling stays. Only the numbers reach mutter.
 TRANSFORM = {
     0: "normal",
     1: "90",
@@ -441,10 +446,9 @@ TRANSFORM = {
 }
 BY_NAME = {name: value for value, name in TRANSFORM.items()}
 
-# Transforms whose logical size is the mode's with width and height swapped —
-# gdctl's set, in the numbering above: 6 swaps and 7 does not, the same 6/7
-# ordering as the name table.
-SWAPPED = {1, 3, 5, 6}
+# Transforms whose logical size is the mode's with width and height swapped:
+# the odd ones, in mutter's numbering.
+SWAPPED = {1, 3, 5, 7}
 
 # ApplyMonitorsConfig methods, and the layout mode in which a logical
 # monitor's size is its mode divided by its scale.
@@ -1308,7 +1312,7 @@ if [[ "$MODE" == "setgame" ]]; then
             [[ $REMOVING == 1 ]] && continue
             # Keep whatever comment was on the line — usually the game's name.
             comment=""
-            [[ "$line" == *[[:space:]]#* ]] && comment="  #${line#*#}"
+            [[ "$line" == *[[:space:]]#* ]] && comment="  #${line#*[[:space:]]#}"
             NEW+="$SET_GAME_APPID = $SET_GAME_ENTRY$comment"$'\n'
             continue
         fi
@@ -1341,9 +1345,12 @@ fi
 
 if [[ "$MODE" == "restore" ]]; then
     if ! state_exists; then
-        warn "no saved state at $STATE_FILE — nothing to restore."
-        warn "If your display is still wrong, set it in Settings > Displays;"
-        warn "gamescale has no record of what it was."
+        # Only to a person: the login unit finds nothing most logins.
+        if [[ -t 2 ]]; then
+            warn "no saved state at $STATE_FILE — nothing to restore."
+            warn "If your display is still wrong, set it in Settings > Displays;"
+            warn "gamescale has no record of what it was."
+        fi
         exit 1
     fi
     restore_now && echo "restored" && exit 0
@@ -1365,11 +1372,11 @@ if [[ "$MODE" == "watchdog" ]]; then
         warn "running; leaving the display and the state file alone"
         exit 1
     fi
-    # Small grace period so the in-sandbox trap gets first crack at it.
-    sleep 2
+    # No grace period needed: the wrapper holds fd 9 through its own trap, so
+    # the lock only frees once that restore is done.
     if state_exists; then
-        # During the grace period the next game may have started and written
-        # its own state; act only on state this watchdog was started for.
+        # The next run can win the freed lock first and write its own state;
+        # act only on state this watchdog was started for.
         owner=$(run_owner)
         if [[ -n "$WATCH_RUN" && -n "$owner" && "$owner" != "$WATCH_RUN" ]]; then
             log "state belongs to run $owner, not $WATCH_RUN; leaving it alone"
@@ -1433,10 +1440,12 @@ if [[ "$MODE" == "doctor" ]]; then
     else
         bad "state dir NOT writable: $STATE_DIR  →  needs --filesystem=...:create"
     fi
-    if [[ -w "$STATE_DIR" ]]; then
-        ok "state dir writable from this side too"
-    else
-        bad "state dir not directly writable here (watchdog lock needs this)"
+    if [[ $IN_FLATPAK == 1 ]]; then
+        if [[ -w "$STATE_DIR" ]]; then
+            ok "state dir writable from the sandbox too"
+        else
+            bad "state dir not writable from the sandbox (watchdog lock needs this)"
+        fi
     fi
     if [[ $CAN_WATCH == 1 ]]; then
         ok "watchdog available (systemd-run + flock)"
@@ -1532,7 +1541,8 @@ if [[ "$MODE" == "doctor" ]]; then
     # Never a failure: restoring works without the extension, and doctor's exit
     # status gates the installer. These are the two states install.sh warns
     # about once and can never mention again.
-    if host test -d "$EXT_ROOT/$EXT_UUID"; then
+    SYS_EXT="$SYS_EXT_ROOT/$EXT_UUID"
+    if host test -d "$EXT_ROOT/$EXT_UUID" || host test -d "$SYS_EXT"; then
         # "The list says no" and "there was no list" are different facts: the
         # schema is absent wherever gnome-shell is, and reading that as
         # not-enabled would print a fix-it command that fixes nothing.
@@ -1548,6 +1558,11 @@ if [[ "$MODE" == "doctor" ]]; then
     else
         huh "no indicator extension (optional; install.sh from a checkout adds it)"
     fi
+    # An OS image's copy keeps getting fixes; a home install silently wins over it.
+    if host test -d "$EXT_ROOT/$EXT_UUID" && host test -d "$SYS_EXT"; then
+        huh "a home install is overriding the one your system provides"
+        more "install.sh --uninstall removes it and goes back to the system copy"
+    fi
     if host test -d "$EXT_ROOT/$EXT_UUID_V1"; then
         huh "the v1 extension is still installed and will not be updated"
         more "it draws a second indicator against the same state file"
@@ -1558,9 +1573,14 @@ if [[ "$MODE" == "doctor" ]]; then
     # some checks green and some red. Re-running the installer is idempotent.
     if [[ $DOCTOR_BAD -gt 0 ]]; then
         echo
-        echo "  $DOCTOR_BAD check(s) failed. The installer is idempotent — re-running it"
-        echo "  fixes everything above except a stale state file:"
-        echo "    curl -fsSL https://raw.githubusercontent.com/arclight-digital/gamescale/main/install.sh | sh"
+        if [[ "$SELF" == "$HOST_HOME"/* ]]; then
+            echo "  $DOCTOR_BAD check(s) failed. The installer is idempotent — re-running it"
+            echo "  fixes everything above except a stale state file:"
+            echo "    curl -fsSL https://raw.githubusercontent.com/arclight-digital/gamescale/main/install.sh | sh"
+        else
+            echo "  $DOCTOR_BAD check(s) failed. This gamescale came with your system,"
+            echo "  so a home install would only hide it — report these to its packager."
+        fi
         exit 1
     fi
     exit 0
@@ -1669,6 +1689,10 @@ fi
 # Run mode
 # ---------------------------------------------------------------------------
 
+if ! is_number "$GAME_SCALE" || [[ $GAME_SCALE =~ ^0+(\.0+)?$ ]]; then
+    give_up "scale must be a positive number, not '$GAME_SCALE'" "$@"
+fi
+
 # Identifies this run in the run file and the watchdog's unit name, so a
 # watchdog left over from the previous game cannot act on this run's state.
 # $$ alone repeats: the sandbox's PID namespace restarts low.
@@ -1676,7 +1700,7 @@ RUN_ID="$$-${RANDOM}${RANDOM}"
 
 # The lock comes first, before the state file is touched. It is the handle
 # the watchdog waits on and the guard against two runs fighting over one
-# display. The short wait absorbs the previous watchdog's grace period. FD 9
+# display. The short wait absorbs a previous watchdog's restore. FD 9
 # is inherited by the game, and the kernel holds the lock until every process
 # holding that descriptor is gone.
 HAVE_LOCK=0
@@ -1740,10 +1764,8 @@ if [[ "${GAMESCALE_NO_WATCH:-0}" != "1" && $CAN_WATCH == 1 && $HAVE_LOCK == 1 ]]
 fi
 
 # Layer 1.
-KEEPER=0
 cleanup() {
     trap - EXIT INT TERM
-    [[ $KEEPER != 0 ]] && kill "$KEEPER" 2>/dev/null
     restore_now
 }
 trap cleanup EXIT INT TERM
@@ -1758,6 +1780,7 @@ if [[ $APPLY_RC -ne 0 ]]; then
         warn "could not apply the ${GAME_SCALE}x layout"
     fi
     state_clear
+    [[ $HAVE_LOCK == 1 ]] && exec 9>&-
     exec "$@"
 fi
 
@@ -1766,7 +1789,9 @@ fi
 # and icons won't follow — a GNOME limitation, not a bug here.
 if [[ $NO_FONT == 0 ]]; then
     RATIO=$(fdiv "$ORIG_SCALE" "$GAME_SCALE")
-    set_setting text-scaling-factor "$(fmul "$ORIG_TEXT_SCALE" "$RATIO")"
+    # gsettings refuses anything above 3.0 outright.
+    set_setting text-scaling-factor \
+        "$(awk -v t="$(fmul "$ORIG_TEXT_SCALE" "$RATIO")" 'BEGIN { print (t > 3 ? 3 : t) }')"
     set_setting cursor-size "$(fround "$(fmul "$ORIG_CURSOR_SIZE" "$RATIO")")"
     log "compensated ${RATIO}x"
 fi
@@ -1780,12 +1805,10 @@ fi
 #
 # 9>&- because the watchdog waits on that descriptor: a keeper holding a copy
 # of it keeps the lock alive after the game is gone, and the layer that covers
-# a SIGKILL would never wake. Killing it on the way out is tidiness only — what
-# actually stops it acting is restore clearing the run file first.
+# a SIGKILL would never wake. It stops when restore clears the run file.
 if [[ "${GAMESCALE_NO_KEEP:-0}" != "1" ]]; then
     display_config watch "$GAME_SCALE" "$RUN_FILE" "$RUN_ID" 9>&- &
-    KEEPER=$!
-    log "keeper started (pid $KEEPER)"
+    log "keeper started"
 fi
 
 # Let mutter settle before the game enumerates outputs.

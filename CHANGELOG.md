@@ -3,9 +3,26 @@
 Dates are release dates. "Stranding" below means a desktop left at 1× scale,
 which is the failure this tool exists not to cause.
 
-## 2.0.2 — 2026-08-16
+## 2.0.2 — 2026-09-26
 
 ### Fixed
+
+- **The indicator threw on GNOME 50 every time it nudged windows.** mutter 50
+  removed `Meta.Window.get_maximized()`, so the repaint nudge from 1.7.2 never
+  ran. It now uses `get_maximize_flags()` where it exists, which still counts a
+  half-tiled window as maximised, and falls back on 48/49.
+- **Flipped-180 and flipped-270 monitors were sized the wrong way round.** The
+  width/height swap was copied from gdctl, which numbers those two backwards
+  against mutter's own enum. A side-by-side layout with either one did not
+  tile, so mutter refused it and the game launched unscaled.
+- **A rejected layout kept the lock for the whole game,** so the next launch
+  ran unmodified with "another gamescale holds the lock".
+- **Font compensation above 3× was silently dropped.** gsettings refuses a
+  `text-scaling-factor` over 3.0, which left the desktop tiny; it now clamps.
+- **The installer took a system copy on PATH for its own.** On an OS image
+  that ships gamescale in `/usr/bin`, `install.sh` tried to write there and
+  `--uninstall` failed partway. Ctrl-C during an install no longer carries on
+  to the next step.
 
 - **A suspend and resume left the desktop scaled twice.** mutter applies our
   layout with the `TEMPORARY` method and never writes it down, so on resume it
@@ -26,6 +43,13 @@ which is the failure this tool exists not to cause.
   one still up would read the restore as drift and undo it. A watchdog reads an
   absent run file as "nobody owns this state", which is what a restore in
   progress means.
+- A home install now warns when the system already provides gamescale, and
+  `--doctor` says when a home copy is overriding the system one — a stale
+  home copy otherwise silently hides the system's fixes.
+- `-s`/`GAMESCALE_SCALE` is validated before anything moves; `--set-game` and
+  the other modes reject extra arguments instead of dropping them; the login
+  unit no longer logs "nothing to restore" on every login; `--help` lists
+  `--restore`.
 
 ## 2.0.1 — 2026-08-05
 

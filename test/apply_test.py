@@ -102,9 +102,9 @@ r = h.run(["apply", "--pack",
 t.equal("fractional scale rounds the logical size like gdctl does",
         [(m[0], m[1]) for m in r.applied[-1]["logical"]], [(0, 0), (1920, 0)])
 
-# --- rotation swaps width and height, and 6/7 are not what they look like ---
-# transform_size swaps for {90, 270, 90-flipped, 270-flipped} = 1, 3, 5, 6.
-# So 6 swaps and 7 does not. Reading it off the intuitive order gets both wrong.
+# --- rotation swaps width and height: the odd transforms, by number ---------
+# The names are gdctl's, which has 6 and 7 backwards; mutter's 7 is the rotated
+# one.
 for transform, name, expect_x in (
     (0, "normal", 2560),
     (1, "90", 1600),
@@ -112,8 +112,8 @@ for transform, name, expect_x in (
     (3, "270", 1600),
     (4, "flipped", 2560),
     (5, "flipped-90", 1600),
-    (6, "flipped-270", 1600),
-    (7, "flipped-180", 2560),
+    (6, "flipped-270", 2560),
+    (7, "flipped-180", 1600),
 ):
     r = h.run(["apply", "--pack",
                f"eDP-1;1;yes;0;0;{name}", "HDMI-1;1;no;1920;0;normal"],

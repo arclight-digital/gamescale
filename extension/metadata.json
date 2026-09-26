@@ -3,8 +3,8 @@
     "name": "gamescale",
     "description": "Top-bar indicator while gamescale holds the desktop at game scale. Hides the accessibility icon when gamescale's font compensation is what triggered it.",
     "url": "https://github.com/arclight-digital/gamescale",
-    "version": 3,
-    "version-name": "2.0.1",
+    "version": 4,
+    "version-name": "2.0.2",
     "shell-version": [
         "48",
         "49",
