@@ -189,6 +189,46 @@ else
     bad "doctor ignored a stale state file"
 fi
 
+# --- a system copy, run through host-os --------------------------------------
+# A launcher granted host-os sees the host's /usr under /run/host, so a system
+# copy runs from a path the host does not have. The watchdog is started on the
+# host, and has to be handed the host's own path. A systemd-run that only
+# records keeps the real one, or this machine's own gamescale, out of it.
+rm -f "$STATE"
+HOSTROOT="$WORK/hostroot"; SBIN="$WORK/sandbox-bin"; RECORD="$WORK/record-only"
+mkdir -p "$HOSTROOT/usr/bin" "$SBIN" "$RECORD"
+cp "$SCRIPT" "$HOSTROOT/usr/bin/gamescale"
+ln -s ../hostroot/usr/bin/gamescale "$SBIN/gamescale"
+# shellcheck disable=SC2016  # expands in the stub, not here
+printf '#!/bin/sh\necho "$*" >> "$SYSTEMD_RUN_LOG"\n' > "$RECORD/systemd-run"
+chmod +x "$RECORD/systemd-run"
+RUN_LOG="$WORK/systemd-run.log"; : > "$RUN_LOG"
+hostos() {  # hostos gamescale args...
+    env DETECT_FIXTURE="$FIXTURE" PY_LOG="$LOG" GS_LOG="$GS_LOG" \
+        SPAWN_LOG="$SPAWN_LOG" GAMESCALE_FLATPAK_INFO="$FAKE_INFO" \
+        GAMESCALE_HOST_ROOT="$HOSTROOT" SYSTEMD_RUN_LOG="$RUN_LOG" \
+        HOME="$FAKEHOME" \
+        PATH="$RECORD:$SBIN:$STUBS:/app/bin:/app/utils/bin:/usr/bin:/bin" \
+        "$@" 2>&1
+}
+if command -v flock >/dev/null 2>&1; then
+    hostos gamescale -- true >/dev/null
+    if grep -q -- " /usr/bin/gamescale --watchdog " "$RUN_LOG"; then
+        ok "the watchdog is handed the host's path to a host-os copy"
+    else
+        bad "the watchdog got a sandbox-only path"; printf '        %s\n' "$(cat "$RUN_LOG")"
+    fi
+else
+    echo "  skip the watchdog's host path (no flock)"
+fi
+rm -f "$STATE"
+out=$(hostos gamescale --doctor)
+if [[ "$out" == *"on the sandbox PATH"* ]]; then
+    ok "doctor accepts a PATH entry that links to the script"
+else
+    bad "doctor rejected a linked PATH entry"; printf '%s\n' "$out" | sed 's/^/        /'
+fi
+
 echo
 echo "  $PASS passed, $FAIL failed"
 [[ $FAIL -eq 0 ]]

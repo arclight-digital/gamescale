@@ -3,6 +3,20 @@
 Dates are release dates. "Stranding" below means a desktop left at 1× scale,
 which is the failure this tool exists not to cause.
 
+## 2.0.3 — 2026-10-02
+
+### Fixed
+
+- **A system copy run from inside a Flatpak lost its watchdog.** A launcher
+  granted `host-os` sees the host's `/usr` under `/run/host`, so a distro's
+  `/usr/bin/gamescale` can run in the sandbox without a copy in `~/.local/bin`.
+  The watchdog was then started on the host at the `/run/host/...` path, which
+  the host does not have, so a crashed game could strand the desktop until the
+  next login. The host is now handed its own path.
+- **`--doctor` rejected a PATH entry that links to the script.** It compared
+  directories, so a symlink to gamescale on the sandbox PATH was reported as
+  missing. It now resolves what the invoked name finds on PATH.
+
 ## 2.0.2 — 2026-09-26
 
 ### Fixed

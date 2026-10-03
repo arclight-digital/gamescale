@@ -90,7 +90,7 @@ set -uo pipefail
 
 # The script is copied to ~/.local/bin, so nothing else on the system records
 # which release it came from. Release CI refuses a tag that disagrees.
-readonly VERSION="2.0.2"
+readonly VERSION="2.0.3"
 
 readonly IFACE_SCHEMA="org.gnome.desktop.interface"
 # 12h ceiling. On reaching it the watchdog gives up WITHOUT restoring — a game
@@ -348,6 +348,14 @@ if [[ -f "$FLATPAK_INFO" ]]; then
 fi
 
 host()      { "${HOST[@]}" "$@"; }
+
+# What the host calls this script. A launcher granted host-os sees the host's
+# /usr under /run/host and can run a system copy from there, a path that does
+# not exist on the host. Prefix overridable purely for tests.
+readonly HOST_ROOT="${GAMESCALE_HOST_ROOT:-/run/host}"
+HOST_SELF="$SELF"
+[[ $IN_FLATPAK == 1 && "$SELF" == "$HOST_ROOT"/usr/* ]] && HOST_SELF="${SELF#"$HOST_ROOT"}"
+readonly HOST_SELF
 # shellcheck disable=SC2016  # "$1" expands in the host-side sh, not here
 have_host() { host sh -c 'command -v -- "$1" >/dev/null 2>&1' sh "$1"; }
 
@@ -1265,7 +1273,7 @@ if [[ "$MODE" == "install" ]]; then
         '' \
         '[Service]' \
         'Type=oneshot' \
-        "ExecStart=${SELF} --restore" \
+        "ExecStart=${HOST_SELF} --restore" \
         'SuccessExitStatus=0 1' \
         '' \
         '[Install]' \
@@ -1455,10 +1463,15 @@ if [[ "$MODE" == "doctor" ]]; then
     # Bare-name invocation rides on an --env=PATH override, which REPLACES the
     # sandbox PATH — a Steam update adding a directory would be dropped.
     if [[ $IN_FLATPAK == 1 ]]; then
-        case ":$PATH:" in
-            *":${SELF%/*}:"*) ok "on the sandbox PATH — 'gamescale %command%' works" ;;
-            *) bad "${SELF%/*} not on sandbox PATH  →  needs --env=PATH=...:\$HOME/.local/bin" ;;
-        esac
+        # Resolved, not compared by directory: a PATH entry may hold a symlink
+        # to this script rather than the script itself.
+        on_path=$(command -v -- "${0##*/}" 2>/dev/null)
+        on_path=$(readlink -f -- "$on_path" 2>/dev/null)
+        if [[ "$on_path" == "$SELF" ]]; then
+            ok "on the sandbox PATH — 'gamescale %command%' works"
+        else
+            bad "${SELF%/*} not on sandbox PATH  →  needs --env=PATH=...:\$HOME/.local/bin"
+        fi
         for d in /app/bin /app/utils/bin /usr/bin; do
             case ":$PATH:" in
                 *":$d:"*) ;;
@@ -1756,7 +1769,7 @@ fi
 if [[ "${GAMESCALE_NO_WATCH:-0}" != "1" && $CAN_WATCH == 1 && $HAVE_LOCK == 1 ]]; then
     if host systemd-run --user --collect --quiet \
             --unit="gamescale-watchdog-$RUN_ID" \
-            "$SELF" --watchdog "$RUN_ID"; then
+            "$HOST_SELF" --watchdog "$RUN_ID"; then
         log "watchdog started"
     else
         warn "could not start watchdog; falling back to trap-only"
