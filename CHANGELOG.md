@@ -3,6 +3,14 @@
 Dates are release dates. "Stranding" below means a desktop left at 1× scale,
 which is the failure this tool exists not to cause.
 
+## 2.0.4 — 2026-11-03
+
+### Changed
+
+- **Declares GNOME 51.** The indicator loads on GNOME Shell 51 (Fedora 45).
+  Every Shell module, export and mutter method it calls was checked against
+  51 and is unchanged; nothing else in the script or the extension moved.
+
 ## 2.0.3 — 2026-10-02
 
 ### Fixed
